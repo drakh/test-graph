@@ -10,6 +10,7 @@ const conf: webpack.Configuration = {
         path: outPath,
         publicPath: '/dist/',
     },
+    mode: 'development',
     resolve: {
         extensions: ['.ts', '.tsx', '.js'],
         plugins: [new TsConfigPathsPlugin()],
