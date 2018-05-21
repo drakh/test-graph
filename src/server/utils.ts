@@ -21,6 +21,7 @@ export function setupApp(): express.Application {
         next();
     });
     app.use('/static', express.static(path.join(__dirname, '../../static')));
+    app.use('/dist', express.static(path.join(__dirname, '../../dist')));
     app.use('/tmp', express.static('tmp'));
     return app;
 }
