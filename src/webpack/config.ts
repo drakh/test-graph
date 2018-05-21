@@ -3,7 +3,8 @@ import { CheckerPlugin, TsConfigPathsPlugin } from 'awesome-typescript-loader';
 import { outPath } from '../common/constants';
 
 const conf: webpack.Configuration = {
-    entry: 'components/graph/app.tsx',
+    entry: {'app': ['components/graph/app.tsx', 'webpack-hot-middleware/client']},
+    devtool: 'source-map',
     output: {
         filename: 'app.js',
         path: outPath,
@@ -23,6 +24,7 @@ const conf: webpack.Configuration = {
         ],
     },
     plugins: [
+        new webpack.HotModuleReplacementPlugin(),
         new webpack.NoEmitOnErrorsPlugin(),
         new webpack.optimize.OccurrenceOrderPlugin(true),
         new CheckerPlugin(),
