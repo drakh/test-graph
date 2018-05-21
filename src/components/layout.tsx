@@ -19,6 +19,7 @@ export class Layout extends React.Component<Props, State> {
             </head>
             <body>
             <main id={mountPoints.APP}/>
+            <script src="/dist/app.js"/>
             </body>
             </html>
         );
