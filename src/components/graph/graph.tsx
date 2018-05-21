@@ -4,6 +4,11 @@ import DeckGL, { COORDINATE_SYSTEM, LineLayer, OrthographicViewport, Scatterplot
 import { nodeId, NodeItem } from '../../common/types';
 import { api } from './client/api';
 
+export interface NodeLink {
+    source: nodeId;
+    target: nodeId;
+}
+
 export interface Bounds {
     x_min: number;
     x_max: number;
@@ -21,9 +26,8 @@ export interface Props {
 export interface State {
     loaded: boolean;
     data: NodeItem[];
-    nodeMap: Map<nodeId, NodeItem>;
     scatterLayer?: ScatterplotLayer;
-    arcLayer?: LineLayer;
+    lineLayer?: LineLayer;
     bounds?: Bounds;
 }
 
@@ -69,12 +73,13 @@ function generateSimulation(nodes: NodeItem[]) {
 }
 */
 export class Graph extends React.Component<Props, State> {
+    private nodeMap: Map<nodeId, NodeItem>;
+
     public constructor(props) {
         super(props);
         this.state = {
             loaded: false,
             data: [],
-            nodeMap: null,
         };
     }
 
@@ -83,8 +88,8 @@ export class Graph extends React.Component<Props, State> {
     }
 
     public render() {
-        const {loaded, scatterLayer} = this.state;
-        const layers = loaded === true ? [scatterLayer] : [];
+        const {loaded, scatterLayer, lineLayer} = this.state;
+        const layers = loaded === true ? [lineLayer, scatterLayer] : [];
         return (
             <div style={{
                 width: size,
@@ -105,94 +110,144 @@ export class Graph extends React.Component<Props, State> {
         try {
             const res = await api.data.load();
             const nodes = res.data;
-            const map = new Map<nodeId, NodeItem>();
-            const bounds: Bounds = {
-                x_min: 0,
-                x_max: 0,
-                y_min: 0,
-                y_max: 0,
-            };
-            const ids: nodeId[] = nodes.map((node, i) => {
-                map.set(node.id, node);
-                if (i === 0) {
-                    bounds.x_max = node.position.x;
-                    bounds.x_min = node.position.x;
-                    bounds.y_max = node.position.y;
-                    bounds.y_min = node.position.y;
-                }
-                else {
-                    if (node.position.x > bounds.x_max) {
-                        bounds.x_max = node.position.x;
-                    }
-                    if (node.position.x < bounds.x_min) {
-                        bounds.x_min = node.position.x;
-                    }
-                    if (node.position.y > bounds.y_max) {
-                        bounds.y_max = node.position.y;
-                    }
-                    if (node.position.y < bounds.y_min) {
-                        bounds.y_min = node.position.y;
-                    }
-                }
-                return node.id;
-            });
-            console.info(bounds);
-            // generateSimulation(nodes);
-
-            this.setState({
-                ...this.state,
-                loaded: true,
-                data: nodes,
-                nodeMap: map,
-                bounds: bounds,
-                scatterLayer: new ScatterplotLayer({
-                    projectionMode: COORDINATE_SYSTEM.IDENTITY,
-                    coordinateSystem: COORDINATE_SYSTEM.IDENTITY,
-                    autoHighlight: true,
-                    id: 'scatterplot-layer',
-                    data: ids,
-                    pickable: true,
-                    radiusScale: 1.5,
-                    radiusMinPixels: 10,
-                    radiusMaxPixels: 20,
-                    getPosition: (d: nodeId) => this.getPosition(d),
-                    getRadius: (d: nodeId) => this.getRadius(d),
-                    getColor: (d: nodeId) => this.getColor(d),
-                }),
-            });
+            this.prepareData(nodes);
         }
         catch (e) {
-            console.error('Error loading data');
+            console.error('Error loading data', e);
         }
     }
 
-    private getColor(_id: nodeId): number[] {
+    private prepareData(nodes: NodeItem[]) {
+        this.nodeMap = new Map<nodeId, NodeItem>();
+        const bounds: Bounds = {
+            x_min: 0,
+            x_max: 0,
+            y_min: 0,
+            y_max: 0,
+        };
+        // build quick nodes lookup
+        const ids: nodeId[] = nodes.map((node, i) => {
+            this.nodeMap.set(node.id, node);
+            if (i === 0) {
+                bounds.x_max = node.position.x;
+                bounds.x_min = node.position.x;
+                bounds.y_max = node.position.y;
+                bounds.y_min = node.position.y;
+            }
+            else {
+                if (node.position.x > bounds.x_max) {
+                    bounds.x_max = node.position.x;
+                }
+                if (node.position.x < bounds.x_min) {
+                    bounds.x_min = node.position.x;
+                }
+                if (node.position.y > bounds.y_max) {
+                    bounds.y_max = node.position.y;
+                }
+                if (node.position.y < bounds.y_min) {
+                    bounds.y_min = node.position.y;
+                }
+            }
+            return node.id;
+        });
+        // we have some non existent links so this is why we do edges here;
+        const lines: NodeLink[] = [];
+        ids.forEach(id => {
+            const node = this.nodeMap.get(id);
+            if (node) {
+                const targets = node.targets ? Array.from(Object.keys(node.targets)) : [];
+                targets.forEach(targetId => {
+                    if (this.nodeMap.get(targetId)) {
+                        // only create link when both source and target node exists
+                        lines.push({
+                            source: id,
+                            target: targetId,
+                        });
+                    }
+                });
+            }
+        });
+
+        // generateSimulation(nodes);
+
+        const scatterPlot = new ScatterplotLayer({
+            projectionMode: COORDINATE_SYSTEM.IDENTITY,
+            coordinateSystem: COORDINATE_SYSTEM.IDENTITY,
+            autoHighlight: true,
+            id: 'scatterplot-layer',
+            data: ids,
+            pickable: true,
+            radiusScale: 1.5,
+            radiusMinPixels: 10,
+            radiusMaxPixels: 20,
+            getPosition: (d: nodeId) => this.getPosition(d),
+            getRadius: (d: nodeId) => this.getRadius(d),
+            getColor: () => this.getColor(),
+        });
+
+        const linePlot = new LineLayer({
+            projectionMode: COORDINATE_SYSTEM.IDENTITY,
+            coordinateSystem: COORDINATE_SYSTEM.IDENTITY,
+            id: 'edge-layer',
+            data: lines,
+            width: 2,
+            getSourcePosition: (d: NodeLink) => this.getLinkSourcePos(d),
+            getTargetPosition: (d: NodeLink) => this.getLinkTargetPos(d),
+            getColor: () => this.getLinkColor(),
+        });
+
+        this.setState({
+            ...this.state,
+            loaded: true,
+            data: nodes,
+            bounds: bounds,
+            scatterLayer: scatterPlot,
+            lineLayer: linePlot,
+        });
+    }
+
+    private getLinkSourcePos(d: NodeLink): number[] {
+        const {source} = d;
+        return this.getPosition(source);
+    }
+
+    private getLinkTargetPos(d: NodeLink): number[] {
+        const {target} = d;
+        return this.getPosition(target);
+    }
+
+    private getColor(): number[] {
         return [255, 140, 0];
     }
 
+    private getLinkColor(): number[] {
+        return [0, 0, 140];
+    }
+
     private getRadius(id: nodeId): number {
-        const node = this.state.nodeMap.get(id);
+        const node = this.nodeMap.get(id);
         return node.data.wallets ? node.data.wallets.length : 1;
     }
 
     private getPosition(id: nodeId): number[] {
-        const {bounds, nodeMap} = this.state;
-        const node = nodeMap.get(id);
+        const half = (size / 2) - 80;
+        const {bounds} = this.state;
+        const node = this.nodeMap.get(id);
         const coords = [
             numberMap({
                 n: node.position.x,
                 in_min: bounds.x_min,
                 in_max: bounds.x_max,
-                out_min: -size / 2,
-                out_max: size / 2,
+                out_min: -half,
+                out_max: half,
             })
             ,
             numberMap({
                 n: node.position.y,
                 in_min: bounds.y_min,
                 in_max: bounds.y_max,
-                out_min: -(size / 2),
-                out_max: (size / 2),
+                out_min: -half,
+                out_max: half,
             }), 0];
         return coords;
     }
