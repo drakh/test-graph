@@ -7,3 +7,4 @@
 ### run
 - clone this repo
 - run `npm install && npm start`
+- open your browse and use `localhost:8080`
