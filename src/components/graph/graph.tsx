@@ -1,6 +1,6 @@
 import * as React from 'react';
 import DeckGL, { COORDINATE_SYSTEM, LineLayer, OrthographicViewport, ScatterplotLayer } from 'deck.gl';
-import { forceLink, forceManyBody, forceSimulation } from 'd3-force';
+import { forceCenter, forceLink, forceManyBody, forceSimulation } from 'd3-force';
 import { Coordinates, nodeId, NodeItem } from '../../common/types';
 import { api } from './client/api';
 
@@ -141,9 +141,9 @@ export class Graph extends React.Component<Props, State> {
             id: 'scatterplot-layer',
             data: ids,
             pickable: true,
-            radiusScale: 1.5,
-            radiusMinPixels: 10,
-            radiusMaxPixels: 20,
+            radiusScale: 6,
+            radiusMinPixels: 2,
+            radiusMaxPixels: 4,
             getPosition: (d: nodeId) => this.getPosition(d),
             getRadius: (d: nodeId) => this.getRadius(d),
             getColor: () => this.getColor(),
@@ -225,13 +225,24 @@ export class Graph extends React.Component<Props, State> {
                 id: id,
             };
         });
-        const edges = {...lines};
+        const edges = lines.map(line => {
+            return {
+                source: line.source,
+                target: line.target,
+                value: Math.round(Math.random() * 100),
+            };
+        });
         const simulation = forceSimulation(nodes)
-            .force('charge', forceManyBody())
-            .force('link', forceLink(edges))
-            // .force('center', forceCenter(size / 2, size / 2))
+            .force('link', forceLink().id(d => {
+                return d['id'];
+            }))
+            .force('charge', forceManyBody().distanceMin(1).distanceMax(100))
+            .force('center', forceCenter(0, 0))
             .stop();
-        for (let i = 0; i < 50; i++) {
+        simulation.force('link', forceLink(edges).iterations(1).strength(0.5));
+        simulation.alpha(0.2);
+        simulation.alphaTarget(0.1);
+        for (let i = 0; i < 10; i++) {
             simulation.tick();
         }
         const x: number[] = [];
