@@ -1,8 +1,17 @@
 import * as React from 'react';
 import DeckGL, { COORDINATE_SYSTEM, LineLayer, OrthographicViewport, ScatterplotLayer } from 'deck.gl';
-// import { forceCenter, forceLink, forceManyBody, forceSimulation } from 'd3-force';
-import { nodeId, NodeItem } from '../../common/types';
+import { forceLink, forceManyBody, forceSimulation } from 'd3-force';
+import { Coordinates, nodeId, NodeItem } from '../../common/types';
 import { api } from './client/api';
+
+export interface GraphNode {
+    id: nodeId;
+    index?: number;
+    x?: number;
+    y?: number;
+    vx?: number;
+    vy?: number;
+}
 
 export interface NodeLink {
     source: nodeId;
@@ -16,6 +25,11 @@ export interface Bounds {
     y_max: number;
 }
 
+export interface GraphLayout {
+    bounds: Bounds;
+    positions: Map<nodeId, Coordinates>;
+}
+
 function numberMap(o: { n: number, in_min: number, in_max: number, out_min: number, out_max: number }): number {
     return (o.n - o.in_min) * (o.out_max - o.out_min) / (o.in_max - o.in_min) + o.out_min;
 }
@@ -26,9 +40,11 @@ export interface Props {
 export interface State {
     loaded: boolean;
     data: NodeItem[];
+    positions: Map<nodeId, Coordinates>;
     scatterLayer?: ScatterplotLayer;
     lineLayer?: LineLayer;
     bounds?: Bounds;
+    nodeMap: Map<nodeId, NodeItem>;
 }
 
 const size = 1080;
@@ -42,45 +58,16 @@ const viewport = new OrthographicViewport({
     bottom: (size / 2),
 });
 
-/*
-function generateSimulation(nodes: NodeItem[]) {
-    // const maxSteps = 5;
-    // const width = size;
-    // const height = size;
-    // const strength = 5;
-    if (!data) {
-        return {nodes: [], links: []};
-    }
-    // copy the data
-    const nodes = data;
-    console.info(nodes);
-    // const links = data.links.map(d => ({...d}));
-    // build the simuatation
-    const simulation = forceSimulation(nodes);
-        .force('link', forceLink().id(d => d.id))
-        .force('charge', forceManyBody().strength(strength))
-        .force('center', forceCenter(width / 2, height / 2))
-        .stop();
-
-    simulation.force('link').links(links);
-
-    const upperBound = Math.ceil(Math.log(simulation.alphaMin()) / Math.log(1 - simulation.alphaDecay()));
-    for (let i = 0; i < Math.min(maxSteps, upperBound); ++i) {
-        simulation.tick();
-    }
-
-    return {nodes, links};
-}
-*/
 export class Graph extends React.Component<Props, State> {
-    private nodeMap: Map<nodeId, NodeItem>;
-
     public constructor(props) {
         super(props);
         this.state = {
             loaded: false,
+            positions: null,
+            nodeMap: null,
             data: [],
-        };
+        }
+        ;
     }
 
     public async componentDidMount() {
@@ -89,7 +76,7 @@ export class Graph extends React.Component<Props, State> {
 
     public render() {
         const {loaded, scatterLayer, lineLayer} = this.state;
-        const layers = loaded === true ? [lineLayer, scatterLayer] : [];
+        const layers = loaded === true ? [scatterLayer, lineLayer] : [];
         return (
             <div style={{
                 width: size,
@@ -118,57 +105,34 @@ export class Graph extends React.Component<Props, State> {
     }
 
     private prepareData(nodes: NodeItem[]) {
-        this.nodeMap = new Map<nodeId, NodeItem>();
-        const bounds: Bounds = {
-            x_min: 0,
-            x_max: 0,
-            y_min: 0,
-            y_max: 0,
-        };
+        const nodeMap = new Map<nodeId, NodeItem>();
         // build quick nodes lookup
-        const ids: nodeId[] = nodes.map((node, i) => {
-            this.nodeMap.set(node.id, node);
-            if (i === 0) {
-                bounds.x_max = node.position.x;
-                bounds.x_min = node.position.x;
-                bounds.y_max = node.position.y;
-                bounds.y_min = node.position.y;
-            }
-            else {
-                if (node.position.x > bounds.x_max) {
-                    bounds.x_max = node.position.x;
-                }
-                if (node.position.x < bounds.x_min) {
-                    bounds.x_min = node.position.x;
-                }
-                if (node.position.y > bounds.y_max) {
-                    bounds.y_max = node.position.y;
-                }
-                if (node.position.y < bounds.y_min) {
-                    bounds.y_min = node.position.y;
-                }
-            }
+        const ids: nodeId[] = nodes.map((node) => {
+            nodeMap.set(node.id, node);
             return node.id;
         });
         // we have some non existent links so this is why we do edges here;
         const lines: NodeLink[] = [];
-        ids.forEach(id => {
-            const node = this.nodeMap.get(id);
-            if (node) {
-                const targets = node.targets ? Array.from(Object.keys(node.targets)) : [];
+        ids.forEach(sourceId => {
+            const sourceNode = nodeMap.get(sourceId);
+            if (sourceNode) {
+                const targets = sourceNode.targets ? Array.from(Object.keys(sourceNode.targets)) : [];
                 targets.forEach(targetId => {
-                    if (this.nodeMap.get(targetId)) {
+                    if (nodeMap.get(targetId)) {
                         // only create link when both source and target node exists
                         lines.push({
-                            source: id,
+                            source: sourceId,
                             target: targetId,
                         });
+                    }
+                    else {
+                        // console.error('target non existant:', targetId, this.nodeMap.get(targetId));
                     }
                 });
             }
         });
 
-        // generateSimulation(nodes);
+        const computed = this.computePositions(ids, lines);
 
         const scatterPlot = new ScatterplotLayer({
             projectionMode: COORDINATE_SYSTEM.IDENTITY,
@@ -200,7 +164,9 @@ export class Graph extends React.Component<Props, State> {
             ...this.state,
             loaded: true,
             data: nodes,
-            bounds: bounds,
+            nodeMap: nodeMap,
+            bounds: computed.bounds,
+            positions: computed.positions,
             scatterLayer: scatterPlot,
             lineLayer: linePlot,
         });
@@ -225,17 +191,18 @@ export class Graph extends React.Component<Props, State> {
     }
 
     private getRadius(id: nodeId): number {
-        const node = this.nodeMap.get(id);
+        const {nodeMap} = this.state;
+        const node = nodeMap.get(id);
         return node.data.wallets ? node.data.wallets.length : 1;
     }
 
     private getPosition(id: nodeId): number[] {
         const half = (size / 2) - 80;
-        const {bounds} = this.state;
-        const node = this.nodeMap.get(id);
+        const {bounds, positions} = this.state;
+        const pos = positions.get(id);
         const coords = [
             numberMap({
-                n: node.position.x,
+                n: pos.x,
                 in_min: bounds.x_min,
                 in_max: bounds.x_max,
                 out_min: -half,
@@ -243,12 +210,47 @@ export class Graph extends React.Component<Props, State> {
             })
             ,
             numberMap({
-                n: node.position.y,
+                n: pos.y,
                 in_min: bounds.y_min,
                 in_max: bounds.y_max,
                 out_min: -half,
                 out_max: half,
             }), 0];
         return coords;
+    }
+
+    private computePositions(ids: nodeId[], lines: NodeLink[]): GraphLayout {
+        const nodes: GraphNode[] = ids.map((id) => {
+            return {
+                id: id,
+            };
+        });
+        const edges = {...lines};
+        const simulation = forceSimulation(nodes)
+            .force('charge', forceManyBody())
+            .force('link', forceLink(edges))
+            // .force('center', forceCenter(size / 2, size / 2))
+            .stop();
+        for (let i = 0; i < 50; i++) {
+            simulation.tick();
+        }
+        const x: number[] = [];
+        const y: number[] = [];
+        const positions = new Map<nodeId, Coordinates>();
+        nodes.forEach(node => {
+            x.push(node.x);
+            y.push(node.y);
+            positions.set(node.id, {x: node.x, y: node.y});
+        });
+        const bounds: Bounds = {
+            x_min: Math.min(...x),
+            x_max: Math.max(...x),
+            y_min: Math.min(...y),
+            y_max: Math.max(...y),
+        };
+        return {
+            bounds: bounds,
+            positions: positions,
+        };
     }
 }
